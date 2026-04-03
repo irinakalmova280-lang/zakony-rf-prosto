@@ -21,8 +21,9 @@ def send_message(text: str):
     except Exception as e:
         print("Ошибка при отправке:", e)
 
-def get_new_laws(limit: int = 5):
-    rss_url = "http://publication.pravo.gov.ru/api/rss?pageSize=50"
+def get_new_laws(limit: int = 50):
+    # Берём побольше из RSS, чтобы захватить больше актов
+    rss_url = "http://publication.pravo.gov.ru/api/rss?pageSize=200"
     try:
         response = requests.get(rss_url, timeout=15)
         response.raise_for_status()
@@ -48,8 +49,8 @@ def get_new_laws(limit: int = 5):
         return []
 
 if __name__ == "__main__":
-    print("Запуск проверки новых законов...")
-    laws = get_new_laws(limit=5)
+    print("Запуск проверки законов...")
+    laws = get_new_laws(limit=50)  # сколько отправить за один запуск
 
     if not laws:
         send_message("⚠️ Пока нет новых опубликованных актов или ошибка подключения к pravo.gov.ru")
