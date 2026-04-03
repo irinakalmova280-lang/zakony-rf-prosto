@@ -32,8 +32,8 @@ def fetch_latest_acts(limit: int = 3):
     if not acts:
         return []
 
-    # берём последние N записей
-    return acts[-limit:]
+    # берём ПЕРВЫЕ N записей
+    return acts[:limit]
 
 def format_act(row: dict) -> str:
     organ = row.get("Наименование принявшего органа", "").strip()
