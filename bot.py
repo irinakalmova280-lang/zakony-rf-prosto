@@ -1,6 +1,7 @@
 import os
 import csv
 import io
+import time
 import requests
 from datetime import datetime
 from typing import List, Dict
@@ -42,12 +43,6 @@ def fetch_latest_acts(limit: int = 3) -> List[Dict]:
         acts = list(reader)
         if not acts:
             return []
-        
-        # Сортируем по дате (если есть поле с датой)
-        # Реальные названия полей в CSV pravo.gov.ru:
-        # "Наименование принявшего органа НПА", "Количество опубликованных НПА за период",
-        # "Начало периода публикации НПА", "Окончание периода публикации НПА", 
-        # "Ссылка на поисковую выборку"
         
         # Пытаемся отсортировать по дате начала периода (от новых к старым)
         try:
@@ -130,5 +125,4 @@ if __name__ == "__main__":
             send_message(msg)
             # Небольшая задержка между сообщениями, чтобы не спамить
             if i < len(acts):
-                import time
                 time.sleep(1)
