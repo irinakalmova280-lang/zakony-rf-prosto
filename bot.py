@@ -1,17 +1,44 @@
 import os
 import requests
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = "@название_канала"
 
-def send_message(text: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+def send_message(text):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     data = {
-        "chat_id": CHANNEL_ID,
+        "chat_id": CHAT_ID,
         "text": text
     }
     r = requests.post(url, data=data)
     r.raise_for_status()
 
+
+# 🔎 Получаем "новость" (пока тестовая)
+def get_law():
+    return {
+        "title": "Новый законопроект",
+        "text": "В России рассматривается законопроект об изменении правил..."
+    }
+
+
+# 🧠 Упрощаем текст
+def simplify(text):
+    return f"Проще говоря: {text}"
+
+
+def main():
+    law = get_law()
+    
+    message = f"""📜 Новый закон
+
+Название: {law['title']}
+
+Суть:
+{simplify(law['text'])}
+"""
+    send_message(message)
+
+
 if __name__ == "__main__":
-    send_message("Тест: бот теперь пишет прямо в канал.")
+    main()
