@@ -36,11 +36,11 @@ def fetch_latest_acts(limit: int = 3):
     return acts[:limit]
 
 def format_act(row: dict) -> str:
-    organ = row.get("Наименование принявшего органа", "").strip()
-    count = row.get("Количество опубликованных документов за период", "").strip()
-    date_from = row.get("Дата начала периода", "").strip()
-    date_to = row.get("Дата окончания периода", "").strip()
-    link = row.get("Ссылка на список документов", "").strip()
+    organ = row.get("Наименование принявшего органа НПА", "").strip()
+    count = row.get("Количество опубликованных НПА за период", "").strip()
+    date_from = row.get("Начало периода публикации НПА", "").strip()
+    date_to = row.get("Окончание периода публикации НПА", "").strip()
+    link = row.get("Ссылка на поисковую выборку", "").strip()
 
     text = (
         f"<b>{organ}</b>\n"
