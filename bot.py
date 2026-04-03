@@ -36,19 +36,18 @@ def fetch_latest_acts(limit: int = 3):
     return acts[-limit:]
 
 def format_act(row: dict) -> str:
-    # названия полей нужно будет подправить по тому, как они реально называются в CSV
-    title = row.get("Наименование", "").strip()
-    pub_date = row.get("Дата_официального_опубликования", "").strip()
-    doc_type = row.get("Вид_правового_акта", "").strip()
-    link = row.get("Ссылка_на_акт", "").strip()
+    organ = row.get("Наименование принявшего органа", "").strip()
+    count = row.get("Количество опубликованных документов за период", "").strip()
+    date_from = row.get("Дата начала периода", "").strip()
+    date_to = row.get("Дата окончания периода", "").strip()
+    link = row.get("Ссылка на список документов", "").strip()
 
-    try:
-        pub_date_dt = datetime.strptime(pub_date, "%d.%m.%Y")
-        pub_date_str = pub_date_dt.strftime("%d.%m.%Y")
-    except Exception:
-        pub_date_str = pub_date
-
-    text = f"<b>{doc_type}</b> от {pub_date_str}\n\n{title}\n\nПодробнее: {link}"
+    text = (
+        f"<b>{organ}</b>\n"
+        f"Период: {date_from} – {date_to}\n"
+        f"Опубликовано документов: {count}\n\n"
+        f"Список документов: {link}"
+    )
     return text
 
 if __name__ == "__main__":
