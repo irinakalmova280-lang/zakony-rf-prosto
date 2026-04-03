@@ -9,8 +9,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 
 # ССЫЛКА НА CSV: возьми её со страницы "Правовые акты за последние 30 дней" на pravo.gov.ru (раздел "Открытые данные")
-CSV_URL = "http://publication.pravo.gov.ru/Document/Download/7710349494-legalacts-30.csv"
-
+CSV_URL = "http://publication.pravo.gov.ru/opendata/7710349494-legalacts-30/data-legalacts-30.csv"
 def send_message(text: str):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {
