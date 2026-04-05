@@ -6,18 +6,143 @@ import time
 from xml.etree import ElementTree as ET
 from bs4 import BeautifulSoup
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+BOT_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 
-RSS_URL = "http://publication.pravo.gov.ru/api/rss?pageSize=200"
-CONSULTANT_URL = "https://www.consultant.ru/legalnews/buh/"
-GARANT_URL = "https://www.garant.ru/hotlaw/federal/archive/2026/"
-RNK_URL = "https://e.rnk.ru/"
+SENT_FILE = "sent_ids.json"
 
-SENT_FILE = "sent_ids.json"  # файл для хранения отправленных ID
+# ── Источники ─────────────────────────────────────────────────────────────────
+
+SOURCES = [
+    {
+        "name": "Российская газета",
+        "url": "https://rg.ru/tema/4365/",   # Законы для граждан
+        "type": "rg",
+    },
+    {
+        "name": "Официальное опубликование законов",
+        "url": "http://publication.pravo.gov.ru/api/rss?pageSize=200",
+        "type": "rss_pravo",
+    },
+    {
+        "name": "Госуслуги — новости",
+        "url": "https://www.gosuslugi.ru/newsrss",
+        "type": "rss_gosuslugi",
+    },
+    {
+        "name": "Роспотребнадзор",
+        "url": "https://rospotrebnadzor.ru/rss/",
+        "type": "rss_generic",
+    },
+]
+
+# ── Фильтры — только то что касается людей ───────────────────────────────────
+
+# Эти слова = точно берём
+MUST_KEYWORDS = [
+    "штраф", "запрет", "запрещ", "обязан", "обязательн",
+    "пособи", "выплат", "льгот", "материнск", "пенси",
+    "жкх", "коммунал", "тариф", "плата за",
+    "МРОТ", "зарплат", "трудов",
+    "водител", "автомобил", "парковк", "гибдд",
+    "алкоголь", "табак", "курени",
+    "указ президента", "федеральный закон",
+    "законопроект", "госдума приняла", "подписал закон",
+    "с 1 января", "с 1 февраля", "с 1 марта", "с 1 апреля",
+    "с 1 мая", "с 1 июня", "с 1 июля", "с 1 августа",
+    "с 1 сентября", "с 1 октября", "с 1 ноября", "с 1 декабря",
+    "ипотек", "аренд", "недвижим",
+    "медицин", "больниц", "полис", "омс",
+    "мигрант", "гражданств", "виза", "регистраци",
+    "интернет", "связь", "vpn", "мобильн",
+]
+
+# Эти слова = пропускаем (технические, не для людей)
+SKIP_KEYWORDS = [
+    "усн", "ндс", "рсв", "аусн", "есхн", "ефс-1",
+    "бухгалтер", "бухучет", "проводк",
+    "арбитраж", "кассаци", "апелляци",
+    "счет-фактур", "книга покупок", "книга продаж",
+    "декларация по ндс", "налог на прибыль организаци",
+    "страховые взносы организаци",
+]
+
+def is_for_people(title: str, desc: str = "") -> bool:
+    text = (title + " " + desc).lower()
+    # Сначала проверяем — не технический ли
+    if any(k in text for k in SKIP_KEYWORDS):
+        return False
+    # Потом проверяем — касается ли людей
+    return any(k in text for k in MUST_KEYWORDS)
 
 
-# ── Дедупликация ─────────────────────────────────────────────────────────────
+# ── Иконки по теме ────────────────────────────────────────────────────────────
+
+ICONS = {
+    "штраф": "🚨",
+    "запрет": "🚫",
+    "запрещ": "🚫",
+    "пособи": "👶",
+    "выплат": "💵",
+    "льгот": "🎁",
+    "пенси": "👴",
+    "материнск": "👩‍👧",
+    "жкх": "🏠",
+    "коммунал": "🏠",
+    "тариф": "💡",
+    "водител": "🚗",
+    "автомобил": "🚗",
+    "парковк": "🅿️",
+    "гибдд": "🚔",
+    "зарплат": "💰",
+    "мрот": "💰",
+    "ипотек": "🏦",
+    "медицин": "🏥",
+    "больниц": "🏥",
+    "полис": "🏥",
+    "интернет": "📱",
+    "vpn": "📱",
+    "указ президента": "🏛",
+    "федеральный закон": "⚖️",
+    "законопроект": "📋",
+}
+
+def get_icon(title: str) -> str:
+    t = title.lower()
+    for key, icon in ICONS.items():
+        if key in t:
+            return icon
+    return "📌"
+
+
+# ── Форматирование — живой язык ───────────────────────────────────────────────
+
+def format_message(item: dict) -> str:
+    icon = get_icon(item["title"])
+    lines = []
+
+    lines.append(f"{icon} <b>{item['title']}</b>")
+
+    if item.get("date"):
+        lines.append(f"📅 {item['date']}")
+
+    if item.get("desc"):
+        desc = item["desc"].strip()
+        if len(desc) > 400:
+            desc = desc[:400].rsplit(" ", 1)[0] + "…"
+        lines.append("")
+        lines.append(desc)
+
+    lines.append("")
+    lines.append(f"Источник: {item.get('source', '')}")
+
+    if item.get("link"):
+        lines.append(f"🔗 <a href='{item['link']}'>Читать →</a>")
+
+    return "\n".join(lines)
+
+
+# ── Дедупликация ──────────────────────────────────────────────────────────────
 
 def load_sent() -> set:
     if os.path.exists(SENT_FILE):
@@ -27,7 +152,7 @@ def load_sent() -> set:
 
 def save_sent(sent: set):
     with open(SENT_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(sent), f, ensure_ascii=False)
+        json.dump(list(sent)[-1000:], f, ensure_ascii=False)
 
 def make_id(title: str, link: str) -> str:
     return hashlib.md5((title + link).encode()).hexdigest()
@@ -53,155 +178,100 @@ def send_message(text: str):
         print("Ошибка отправки:", e)
 
 
-# ── Форматирование ────────────────────────────────────────────────────────────
-
-CATEGORY_ICONS = {
-    "федеральный закон": "⚖️",
-    "указ президента": "🏛",
-    "постановление правительства": "📜",
-    "налог": "💰",
-    "штраф": "🚫",
-    "изменение": "🔄",
-}
-
-def get_icon(title: str) -> str:
-    t = title.lower()
-    for key, icon in CATEGORY_ICONS.items():
-        if key in t:
-            return icon
-    return "📄"
-
-def format_message(item: dict) -> str:
-    icon = get_icon(item["title"])
-    parts = [f"{icon} <b>{item['title']}</b>"]
-
-    if item.get("date"):
-        parts.append(f"\n🗓 <i>{item['date']}</i>")
-
-    if item.get("desc"):
-        desc = item["desc"].strip()
-        if len(desc) > 600:
-            desc = desc[:600].rsplit(" ", 1)[0] + "…"
-        parts.append(f"\n{desc}")
-
-    if item.get("source"):
-        parts.append(f"\n🔖 <i>Источник: {item['source']}</i>")
-
-    if item.get("link"):
-        parts.append(f"\n\n🔗 <a href='{item['link']}'>Читать полностью →</a>")
-
-    return "\n".join(parts)
-
-
-# ── Фильтрация ────────────────────────────────────────────────────────────────
-
-KEYWORDS = [
-    "федеральный закон", "указ президента", "постановление правительства",
-    "налог", "штраф", "изменение"
-]
-
-def is_important(title: str) -> bool:
-    t = title.lower()
-    return any(k in t for k in KEYWORDS)
-
-
 # ── Парсеры ───────────────────────────────────────────────────────────────────
 
 def fetch(url: str) -> str:
     try:
-        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r = requests.get(url, timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
         r.raise_for_status()
         return r.text
     except Exception as e:
         print(f"Ошибка загрузки {url}: {e}")
         return ""
 
-def get_new_laws(limit: int = 10) -> list:
+def parse_rss(html: str, source_name: str) -> list:
+    """Универсальный RSS парсер"""
     try:
-        r = requests.get(RSS_URL, timeout=15)
-        r.raise_for_status()
-        root = ET.fromstring(r.content)
-        laws = []
+        root = ET.fromstring(html.encode("utf-8") if isinstance(html, str) else html)
+        items = []
         for item in root.findall(".//item"):
             title = (item.findtext("title") or "").strip()
             link  = (item.findtext("link")  or "").strip()
             date  = (item.findtext("pubDate") or "").strip()
             desc  = (item.findtext("description") or "").strip()
-            if not is_important(title):
+            # Убираем HTML теги из описания
+            desc = BeautifulSoup(desc, "html.parser").get_text()
+            if not is_for_people(title, desc):
                 continue
-            laws.append({
+            items.append({
                 "title": title,
                 "link": link,
-                "date": date,
-                "desc": (desc[:600] + "…") if len(desc) > 600 else desc,
-                "source": "pravo.gov.ru",
+                "date": date[:16] if date else "",
+                "desc": desc[:400],
+                "source": source_name,
             })
-        return laws[:limit]
+        return items
     except Exception as e:
-        print("Ошибка RSS:", e)
+        print(f"Ошибка RSS парсинга ({source_name}):", e)
         return []
 
-def parse_consultant(html: str) -> list:
+def parse_rg(html: str) -> list:
+    """Российская газета"""
     soup = BeautifulSoup(html, "html.parser")
     items = []
-    for item in soup.select("div.listing-news__item"):
-        a    = item.select_one("a.listing-news__item-title")
-        date = item.select_one("div.listing-news__item-date")
-        desc = item.select_one("span.listing-news__item-description")
-        if not a:
+    for article in soup.select("article, div.article-item, div.b-material-wrapper__content"):
+        a = article.select_one("a[href]")
+        title_tag = article.select_one("h2, h3, .title, .article-title")
+        desc_tag = article.select_one("p, .lead, .desc, .announce")
+        date_tag = article.select_one("time, .date, .article-date")
+
+        if not a or not title_tag:
             continue
-        title = a.get_text(strip=True)
-        if not is_important(title):
-            continue
-        link = a.get("href", "")
+
+        title = title_tag.get_text(strip=True)
+        desc  = desc_tag.get_text(strip=True) if desc_tag else ""
+        date  = date_tag.get_text(strip=True) if date_tag else ""
+        link  = a.get("href", "")
         if not link.startswith("http"):
-            link = "https://www.consultant.ru" + link
+            link = "https://rg.ru" + link
+
+        if not is_for_people(title, desc):
+            continue
+
         items.append({
             "title": title,
             "link": link,
-            "date": date.get_text(strip=True) if date else "",
-            "desc": desc.get_text(strip=True) if desc else "",
-            "source": "consultant.ru",
+            "date": date,
+            "desc": desc[:400],
+            "source": "rg.ru",
         })
     return items
 
-def parse_garant(html: str) -> list:
-    soup = BeautifulSoup(html, "html.parser")
-    items = []
-    for a in soup.select("div.listing_news a"):
-        title = a.get_text(strip=True)
-        link  = a.get("href", "")
-        if not title or not is_important(title):
-            continue
-        if not link.startswith("http"):
-            link = "https://www.garant.ru" + link
-        items.append({"title": title, "link": link, "date": "", "desc": "", "source": "garant.ru"})
-    return items
 
-def parse_rnk(html: str) -> list:
-    soup = BeautifulSoup(html, "html.parser")
-    items = []
-    for a in soup.select("div.header-panel__news ul li a"):
-        title = a.get_text(strip=True)
-        link  = a.get("href", "")
-        if not title or not is_important(title):
-            continue
-        if not link.startswith("http"):
-            link = "https://www.rnk.ru" + link
-        items.append({"title": title, "link": link, "date": "", "desc": "", "source": "rnk.ru"})
-    return items
+# ── Сбор всех новостей ────────────────────────────────────────────────────────
 
-def get_extra_news() -> list:
-    news = []
-    for url, parser in [
-        (CONSULTANT_URL, parse_consultant),
-        (GARANT_URL,     parse_garant),
-        (RNK_URL,        parse_rnk),
-    ]:
-        html = fetch(url)
-        if html:
-            news.extend(parser(html))
-    return news
+def collect_all_news() -> list:
+    all_news = []
+
+    for source in SOURCES:
+        print(f"📡 Загружаю: {source['name']}...")
+        html = fetch(source["url"])
+        if not html:
+            continue
+
+        if source["type"] == "rg":
+            items = parse_rg(html)
+        elif source["type"] in ("rss_pravo", "rss_gosuslugi", "rss_generic"):
+            items = parse_rss(html, source["name"])
+        else:
+            items = []
+
+        print(f"   Найдено подходящих: {len(items)}")
+        all_news.extend(items)
+
+    return all_news
 
 
 # ── Главная ───────────────────────────────────────────────────────────────────
@@ -210,15 +280,16 @@ if __name__ == "__main__":
     print("🚀 Запуск бота...")
 
     sent = load_sent()
-    laws  = get_new_laws(limit=5)
-    extra = get_extra_news()
-    all_items = laws + extra
+    all_items = collect_all_news()
+
+    if not all_items:
+        print("Новостей не найдено.")
 
     new_count = 0
     for item in all_items:
         uid = make_id(item["title"], item["link"])
         if uid in sent:
-            print(f"⏭  Уже отправлено: {item['title'][:60]}")
+            print(f"⏭  Пропуск: {item['title'][:60]}")
             continue
 
         text = format_message(item)
@@ -229,9 +300,4 @@ if __name__ == "__main__":
         time.sleep(2)
 
     save_sent(sent)
-
-    if new_count == 0:
-        send_message("📭 Нет новых важных законов или налоговых изменений")
-        print("Новых новостей нет.")
-    else:
-        print(f"Готово. Отправлено {new_count} новых сообщений.")
+    print(f"\nГотово. Отправлено новых: {new_count}")
