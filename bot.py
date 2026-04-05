@@ -1,8 +1,10 @@
 import os
+import json
+import hashlib
 import requests
+import time
 from xml.etree import ElementTree as ET
 from bs4 import BeautifulSoup
-import time
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
@@ -12,9 +14,30 @@ CONSULTANT_URL = "https://www.consultant.ru/legalnews/buh/"
 GARANT_URL = "https://www.garant.ru/hotlaw/federal/archive/2026/"
 RNK_URL = "https://e.rnk.ru/"
 
+SENT_FILE = "sent_ids.json"  # файл для хранения отправленных ID
+
+
+# ── Дедупликация ─────────────────────────────────────────────────────────────
+
+def load_sent() -> set:
+    if os.path.exists(SENT_FILE):
+        with open(SENT_FILE, "r", encoding="utf-8") as f:
+            return set(json.load(f))
+    return set()
+
+def save_sent(sent: set):
+    with open(SENT_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(sent), f, ensure_ascii=False)
+
+def make_id(title: str, link: str) -> str:
+    return hashlib.md5((title + link).encode()).hexdigest()
+
+
+# ── Telegram ──────────────────────────────────────────────────────────────────
+
 def send_message(text: str):
     if not BOT_TOKEN or not CHANNEL_ID:
-        print("Нет BOT_TOKEN или CHANNEL_ID")
+        print("⚠️  Нет BOT_TOKEN или CHANNEL_ID")
         return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
@@ -29,116 +52,186 @@ def send_message(text: str):
     except Exception as e:
         print("Ошибка отправки:", e)
 
+
+# ── Форматирование ────────────────────────────────────────────────────────────
+
+CATEGORY_ICONS = {
+    "федеральный закон": "⚖️",
+    "указ президента": "🏛",
+    "постановление правительства": "📜",
+    "налог": "💰",
+    "штраф": "🚫",
+    "изменение": "🔄",
+}
+
+def get_icon(title: str) -> str:
+    t = title.lower()
+    for key, icon in CATEGORY_ICONS.items():
+        if key in t:
+            return icon
+    return "📄"
+
+def format_message(item: dict) -> str:
+    icon = get_icon(item["title"])
+    parts = [f"{icon} <b>{item['title']}</b>"]
+
+    if item.get("date"):
+        parts.append(f"\n🗓 <i>{item['date']}</i>")
+
+    if item.get("desc"):
+        desc = item["desc"].strip()
+        if len(desc) > 600:
+            desc = desc[:600].rsplit(" ", 1)[0] + "…"
+        parts.append(f"\n{desc}")
+
+    if item.get("source"):
+        parts.append(f"\n🔖 <i>Источник: {item['source']}</i>")
+
+    if item.get("link"):
+        parts.append(f"\n\n🔗 <a href='{item['link']}'>Читать полностью →</a>")
+
+    return "\n".join(parts)
+
+
+# ── Фильтрация ────────────────────────────────────────────────────────────────
+
+KEYWORDS = [
+    "федеральный закон", "указ президента", "постановление правительства",
+    "налог", "штраф", "изменение"
+]
+
 def is_important(title: str) -> bool:
     t = title.lower()
-    keywords = ["федеральный закон","указ президента","постановление правительства","налог","штраф","изменение"]
-    return any(k in t for k in keywords)
+    return any(k in t for k in KEYWORDS)
 
-def get_new_laws(limit: int = 10):
+
+# ── Парсеры ───────────────────────────────────────────────────────────────────
+
+def fetch(url: str) -> str:
     try:
-        response = requests.get(RSS_URL, timeout=15)
-        response.raise_for_status()
-        root = ET.fromstring(response.content)
+        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        return r.text
+    except Exception as e:
+        print(f"Ошибка загрузки {url}: {e}")
+        return ""
+
+def get_new_laws(limit: int = 10) -> list:
+    try:
+        r = requests.get(RSS_URL, timeout=15)
+        r.raise_for_status()
+        root = ET.fromstring(r.content)
         laws = []
         for item in root.findall(".//item"):
-            title = item.findtext("title", default="") or ""
-            link = item.findtext("link", default="") or ""
-            pub_date = item.findtext("pubDate", default="") or ""
-            description = item.findtext("description", default="") or ""
+            title = (item.findtext("title") or "").strip()
+            link  = (item.findtext("link")  or "").strip()
+            date  = (item.findtext("pubDate") or "").strip()
+            desc  = (item.findtext("description") or "").strip()
             if not is_important(title):
                 continue
             laws.append({
-                "title": title.strip(),
-                "link": link.strip(),
-                "date": pub_date.strip(),
-                "desc": (description.strip()[:800] + "…") if description else "",
+                "title": title,
+                "link": link,
+                "date": date,
+                "desc": (desc[:600] + "…") if len(desc) > 600 else desc,
+                "source": "pravo.gov.ru",
             })
         return laws[:limit]
     except Exception as e:
         print("Ошибка RSS:", e)
         return []
 
-def fetch_site(url: str):
-    try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        return r.text
-    except Exception as e:
-        print("Ошибка загрузки сайта:", url, e)
-        return ""
-
-def parse_consultant(html: str):
+def parse_consultant(html: str) -> list:
     soup = BeautifulSoup(html, "html.parser")
     items = []
     for item in soup.select("div.listing-news__item"):
-        title_tag = item.select_one("a.listing-news__item-title")
-        date_tag = item.select_one("div.listing-news__item-date")
-        desc_tag = item.select_one("span.listing-news__item-description")
-        if title_tag:
-            title = title_tag.get_text(strip=True)
-            link = title_tag.get("href", "")
-            if not link.startswith("http"):
-                link = "https://www.consultant.ru" + link
-            date = date_tag.get_text(strip=True) if date_tag else ""
-            desc = desc_tag.get_text(strip=True) if desc_tag else ""
-            if is_important(title):
-                items.append({"title": title, "link": link, "date": date, "desc": desc})
+        a    = item.select_one("a.listing-news__item-title")
+        date = item.select_one("div.listing-news__item-date")
+        desc = item.select_one("span.listing-news__item-description")
+        if not a:
+            continue
+        title = a.get_text(strip=True)
+        if not is_important(title):
+            continue
+        link = a.get("href", "")
+        if not link.startswith("http"):
+            link = "https://www.consultant.ru" + link
+        items.append({
+            "title": title,
+            "link": link,
+            "date": date.get_text(strip=True) if date else "",
+            "desc": desc.get_text(strip=True) if desc else "",
+            "source": "consultant.ru",
+        })
     return items
 
-def parse_garant(html: str):
+def parse_garant(html: str) -> list:
     soup = BeautifulSoup(html, "html.parser")
     items = []
-    for item in soup.select("div.listing_news a"):
-        title = item.get_text(strip=True)
-        link = item.get("href", "")
-        if title and link:
-            if not link.startswith("http"):
-                link = "https://www.garant.ru" + link
-            if is_important(title):
-                items.append({"title": title, "link": link, "date": "", "desc": ""})
+    for a in soup.select("div.listing_news a"):
+        title = a.get_text(strip=True)
+        link  = a.get("href", "")
+        if not title or not is_important(title):
+            continue
+        if not link.startswith("http"):
+            link = "https://www.garant.ru" + link
+        items.append({"title": title, "link": link, "date": "", "desc": "", "source": "garant.ru"})
     return items
 
-def parse_rnk(html: str):
+def parse_rnk(html: str) -> list:
     soup = BeautifulSoup(html, "html.parser")
     items = []
-    for item in soup.select("div.header-panel__news ul li a"):
-        title = item.get_text(strip=True)
-        link = item.get("href", "")
-        if title and link:
-            if not link.startswith("http"):
-                link = "https://www.rnk.ru" + link
-            if is_important(title):
-                items.append({"title": title, "link": link, "date": "", "desc": ""})
+    for a in soup.select("div.header-panel__news ul li a"):
+        title = a.get_text(strip=True)
+        link  = a.get("href", "")
+        if not title or not is_important(title):
+            continue
+        if not link.startswith("http"):
+            link = "https://www.rnk.ru" + link
+        items.append({"title": title, "link": link, "date": "", "desc": "", "source": "rnk.ru"})
     return items
 
-def get_extra_news():
+def get_extra_news() -> list:
     news = []
-    html = fetch_site(CONSULTANT_URL)
-    if html:
-        news.extend(parse_consultant(html))
-    html = fetch_site(GARANT_URL)
-    if html:
-        news.extend(parse_garant(html))
-    html = fetch_site(RNK_URL)
-    if html:
-        news.extend(parse_rnk(html))
+    for url, parser in [
+        (CONSULTANT_URL, parse_consultant),
+        (GARANT_URL,     parse_garant),
+        (RNK_URL,        parse_rnk),
+    ]:
+        html = fetch(url)
+        if html:
+            news.extend(parser(html))
     return news
 
+
+# ── Главная ───────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
-    print("Запуск...")
-    laws = get_new_laws(limit=5)
+    print("🚀 Запуск бота...")
+
+    sent = load_sent()
+    laws  = get_new_laws(limit=5)
     extra = get_extra_news()
     all_items = laws + extra
-    if not all_items:
+
+    new_count = 0
+    for item in all_items:
+        uid = make_id(item["title"], item["link"])
+        if uid in sent:
+            print(f"⏭  Уже отправлено: {item['title'][:60]}")
+            continue
+
+        text = format_message(item)
+        send_message(text)
+        sent.add(uid)
+        new_count += 1
+        print(f"✅ Отправлено: {item['title'][:60]}")
+        time.sleep(2)
+
+    save_sent(sent)
+
+    if new_count == 0:
         send_message("📭 Нет новых важных законов или налоговых изменений")
+        print("Новых новостей нет.")
     else:
-        for law in all_items:
-            text = (
-                f"📄 <b>{law['title']}</b>\n\n"
-                f"📅 {law['date']}\n\n"
-                f"{law['desc']}\n\n"
-                f"🔗 <a href='{law['link']}'>Читать полностью</a>"
-            )
-            send_message(text)
-            print("Отправлено:", law["title"])
-            time.sleep(2)
+        print(f"Готово. Отправлено {new_count} новых сообщений.")
