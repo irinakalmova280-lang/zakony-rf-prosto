@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 
 BOT_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+GROQ_KEY   = os.getenv("GROQ_API_KEY")        # ← добавили
 
 SENT_FILE = "sent_ids.json"
 
@@ -16,7 +17,7 @@ SENT_FILE = "sent_ids.json"
 SOURCES = [
     {
         "name": "Российская газета",
-        "url": "https://rg.ru/tema/4365/",   # Законы для граждан
+        "url": "https://rg.ru/tema/4365/",
         "type": "rg",
     },
     {
@@ -36,14 +37,37 @@ SOURCES = [
     },
 ]
 
+# ── Фильтр региональных законов ───────────────────────────────────────────────
+
+REGIONAL_MARKERS = [
+    "областной закон", "республик", "губернатор", "муниципальн",
+    "псковской", "новгородской", "московской области", "ленинградской",
+    "краснодарского", "свердловской", "челябинской", "самарской",
+    "ростовской", "нижегородской", "татарстан", "башкортостан",
+    "красноярского", "иркутской", "омской", "саратовской",
+    "воронежской", "волгоградской", "пермского", "тюменской",
+    "кемеровской", "оренбургской", "ставропольского", "приморского",
+    "хабаровского", "астраханской", "брянской", "владимирской",
+    "вологодской", "ивановской", "калужской", "костромской",
+    "курской", "липецкой", "орловской", "рязанской", "смоленской",
+    "тамбовской", "тверской", "тульской", "ярославской",
+    "порховского", "пушкиногорского", "администраци области",
+    "комитет по тарифам", "министерства транспорта и дорожного",
+    "министерства строительства и жилищно-коммунального хозяйства",
+    "министерства тарифов",
+]
+
+def is_federal(title: str) -> bool:
+    t = title.lower()
+    return not any(k in t for k in REGIONAL_MARKERS)
+
 # ── Фильтры — только то что касается людей ───────────────────────────────────
 
-# Эти слова = точно берём
 MUST_KEYWORDS = [
     "штраф", "запрет", "запрещ", "обязан", "обязательн",
     "пособи", "выплат", "льгот", "материнск", "пенси",
     "жкх", "коммунал", "тариф", "плата за",
-    "МРОТ", "зарплат", "трудов",
+    "мрот", "зарплат", "трудов",
     "водител", "автомобил", "парковк", "гибдд",
     "алкоголь", "табак", "курени",
     "указ президента", "федеральный закон",
@@ -55,9 +79,11 @@ MUST_KEYWORDS = [
     "медицин", "больниц", "полис", "омс",
     "мигрант", "гражданств", "виза", "регистраци",
     "интернет", "связь", "vpn", "мобильн",
+    "дети", "ребенок", "семь", "школ",
+    "пенсионер", "инвалид", "ветеран",
+    "военнослужащ", "мобилизац",
 ]
 
-# Эти слова = пропускаем (технические, не для людей)
 SKIP_KEYWORDS = [
     "усн", "ндс", "рсв", "аусн", "есхн", "ефс-1",
     "бухгалтер", "бухучет", "проводк",
@@ -65,46 +91,67 @@ SKIP_KEYWORDS = [
     "счет-фактур", "книга покупок", "книга продаж",
     "декларация по ндс", "налог на прибыль организаци",
     "страховые взносы организаци",
+    "водоснабжени", "водоотведени", "канализаци",
+    "порядок уведомлени", "конфликт интересов",
+    "благоустройств", "рейтингового голосовани",
 ]
 
 def is_for_people(title: str, desc: str = "") -> bool:
     text = (title + " " + desc).lower()
-    # Сначала проверяем — не технический ли
     if any(k in text for k in SKIP_KEYWORDS):
         return False
-    # Потом проверяем — касается ли людей
     return any(k in text for k in MUST_KEYWORDS)
 
+# ── AI объяснение через Groq (бесплатно) ─────────────────────────────────────
+
+def explain_with_groq(title: str, desc: str) -> str:
+    if not GROQ_KEY:
+        return ""
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "llama3-8b-8192",
+                "max_tokens": 200,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Новость: {title}\n{desc}\n\n"
+                            "Объясни это простым языком для обычного человека "
+                            "в 2-3 коротких предложениях. "
+                            "Скажи: что изменилось, кого касается, "
+                            "что нужно сделать (если нужно). "
+                            "Без вступлений, сразу по делу. Начни с эмодзи 💡"
+                        ),
+                    }
+                ],
+            },
+            timeout=20,
+        )
+        data = r.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print("Ошибка Groq:", e)
+        return ""
 
 # ── Иконки по теме ────────────────────────────────────────────────────────────
 
 ICONS = {
-    "штраф": "🚨",
-    "запрет": "🚫",
-    "запрещ": "🚫",
-    "пособи": "👶",
-    "выплат": "💵",
-    "льгот": "🎁",
-    "пенси": "👴",
-    "материнск": "👩‍👧",
-    "жкх": "🏠",
-    "коммунал": "🏠",
-    "тариф": "💡",
-    "водител": "🚗",
-    "автомобил": "🚗",
-    "парковк": "🅿️",
-    "гибдд": "🚔",
-    "зарплат": "💰",
-    "мрот": "💰",
-    "ипотек": "🏦",
-    "медицин": "🏥",
-    "больниц": "🏥",
-    "полис": "🏥",
-    "интернет": "📱",
-    "vpn": "📱",
-    "указ президента": "🏛",
-    "федеральный закон": "⚖️",
-    "законопроект": "📋",
+    "штраф": "🚨", "запрет": "🚫", "запрещ": "🚫",
+    "пособи": "👶", "выплат": "💵", "льгот": "🎁",
+    "пенси": "👴", "материнск": "👩‍👧",
+    "жкх": "🏠", "коммунал": "🏠", "тариф": "💡",
+    "водител": "🚗", "автомобил": "🚗", "парковк": "🅿️", "гибдд": "🚔",
+    "зарплат": "💰", "мрот": "💰",
+    "ипотек": "🏦", "медицин": "🏥", "больниц": "🏥", "полис": "🏥",
+    "интернет": "📱", "vpn": "📱",
+    "указ президента": "🏛", "федеральный закон": "⚖️", "законопроект": "📋",
+    "дети": "👧", "школ": "🎒", "военнослужащ": "🪖",
 }
 
 def get_icon(title: str) -> str:
@@ -114,19 +161,20 @@ def get_icon(title: str) -> str:
             return icon
     return "📌"
 
+# ── Форматирование ────────────────────────────────────────────────────────────
 
-# ── Форматирование — живой язык ───────────────────────────────────────────────
-
-def format_message(item: dict) -> str:
+def format_message(item: dict, explanation: str = "") -> str:
     icon = get_icon(item["title"])
-    lines = []
-
-    lines.append(f"{icon} <b>{item['title']}</b>")
+    lines = [f"{icon} <b>{item['title']}</b>"]
 
     if item.get("date"):
         lines.append(f"📅 {item['date']}")
 
-    if item.get("desc"):
+    # AI объяснение вместо сырого описания
+    if explanation:
+        lines.append("")
+        lines.append(explanation)
+    elif item.get("desc"):
         desc = item["desc"].strip()
         if len(desc) > 400:
             desc = desc[:400].rsplit(" ", 1)[0] + "…"
@@ -135,12 +183,13 @@ def format_message(item: dict) -> str:
 
     lines.append("")
     lines.append(f"Источник: {item.get('source', '')}")
-
     if item.get("link"):
         lines.append(f"🔗 <a href='{item['link']}'>Читать →</a>")
 
-    return "\n".join(lines)
+    lines.append("")
+    lines.append("<i>ℹ️ Материал носит ознакомительный характер и не является юридической консультацией.</i>")
 
+    return "\n".join(lines)
 
 # ── Дедупликация ──────────────────────────────────────────────────────────────
 
@@ -156,7 +205,6 @@ def save_sent(sent: set):
 
 def make_id(title: str, link: str) -> str:
     return hashlib.md5((title + link).encode()).hexdigest()
-
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
@@ -177,7 +225,6 @@ def send_message(text: str):
     except Exception as e:
         print("Ошибка отправки:", e)
 
-
 # ── Парсеры ───────────────────────────────────────────────────────────────────
 
 def fetch(url: str) -> str:
@@ -192,7 +239,6 @@ def fetch(url: str) -> str:
         return ""
 
 def parse_rss(html: str, source_name: str) -> list:
-    """Универсальный RSS парсер"""
     try:
         root = ET.fromstring(html.encode("utf-8") if isinstance(html, str) else html)
         items = []
@@ -200,9 +246,9 @@ def parse_rss(html: str, source_name: str) -> list:
             title = (item.findtext("title") or "").strip()
             link  = (item.findtext("link")  or "").strip()
             date  = (item.findtext("pubDate") or "").strip()
-            desc  = (item.findtext("description") or "").strip()
-            # Убираем HTML теги из описания
-            desc = BeautifulSoup(desc, "html.parser").get_text()
+            desc  = BeautifulSoup(item.findtext("description") or "", "html.parser").get_text()
+            if not is_federal(title):
+                continue
             if not is_for_people(title, desc):
                 continue
             items.append({
@@ -218,61 +264,48 @@ def parse_rss(html: str, source_name: str) -> list:
         return []
 
 def parse_rg(html: str) -> list:
-    """Российская газета"""
     soup = BeautifulSoup(html, "html.parser")
     items = []
     for article in soup.select("article, div.article-item, div.b-material-wrapper__content"):
-        a = article.select_one("a[href]")
+        a         = article.select_one("a[href]")
         title_tag = article.select_one("h2, h3, .title, .article-title")
-        desc_tag = article.select_one("p, .lead, .desc, .announce")
-        date_tag = article.select_one("time, .date, .article-date")
-
+        desc_tag  = article.select_one("p, .lead, .desc, .announce")
+        date_tag  = article.select_one("time, .date, .article-date")
         if not a or not title_tag:
             continue
-
         title = title_tag.get_text(strip=True)
         desc  = desc_tag.get_text(strip=True) if desc_tag else ""
         date  = date_tag.get_text(strip=True) if date_tag else ""
         link  = a.get("href", "")
         if not link.startswith("http"):
             link = "https://rg.ru" + link
-
+        if not is_federal(title):
+            continue
         if not is_for_people(title, desc):
             continue
-
         items.append({
-            "title": title,
-            "link": link,
-            "date": date,
-            "desc": desc[:400],
+            "title": title, "link": link,
+            "date": date, "desc": desc[:400],
             "source": "rg.ru",
         })
     return items
-
 
 # ── Сбор всех новостей ────────────────────────────────────────────────────────
 
 def collect_all_news() -> list:
     all_news = []
-
     for source in SOURCES:
         print(f"📡 Загружаю: {source['name']}...")
         html = fetch(source["url"])
         if not html:
             continue
-
         if source["type"] == "rg":
             items = parse_rg(html)
-        elif source["type"] in ("rss_pravo", "rss_gosuslugi", "rss_generic"):
-            items = parse_rss(html, source["name"])
         else:
-            items = []
-
-        print(f"   Найдено подходящих: {len(items)}")
+            items = parse_rss(html, source["name"])
+        print(f"   Подходящих: {len(items)}")
         all_news.extend(items)
-
     return all_news
-
 
 # ── Главная ───────────────────────────────────────────────────────────────────
 
@@ -292,7 +325,10 @@ if __name__ == "__main__":
             print(f"⏭  Пропуск: {item['title'][:60]}")
             continue
 
-        text = format_message(item)
+        # Объясняем через Groq
+        explanation = explain_with_groq(item["title"], item.get("desc", ""))
+
+        text = format_message(item, explanation)
         send_message(text)
         sent.add(uid)
         new_count += 1
